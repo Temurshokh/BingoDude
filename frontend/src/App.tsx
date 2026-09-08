@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 
 const MAX_IMAGE = 99 * 1024;
-const API = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "" : `${window.location.origin}`);
+const API = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? window.location.origin : "");
 
 type User = { id: number; username: string };
 type Post = {
@@ -21,17 +21,23 @@ type Reply = { id: number; content: string; createdAt: number; userId: number; u
 type ApiError = Error & { status?: number };
 
 async function api<T>(path: string, options: RequestInit = {}) {
-  const token = localStorage.getItem("bingo_token");
-  const headers = new Headers(options.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API}${path}`, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const err: ApiError = new Error(data.error || "Something went wrong.");
-    err.status = response.status;
-    throw err;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  try {
+    const token = localStorage.getItem("bingo_token");
+    const headers = new Headers(options.headers);
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const response = await fetch(`${API}${path}`, { ...options, headers, signal: controller.signal });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const err: ApiError = new Error(data.error || "Something went wrong.");
+      err.status = response.status;
+      throw err;
+    }
+    return data as T;
+  } finally {
+    clearTimeout(timeout);
   }
-  return data as T;
 }
 
 function ago(timestamp: number) {
