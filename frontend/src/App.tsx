@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 
 const MAX_IMAGE = 99 * 1024;
-const API = import.meta.env.VITE_API_URL || "";
+const API = "";
 
 type User = { id: number; username: string };
 type Post = {
@@ -18,13 +18,19 @@ type Story = {
 };
 type Reply = { id: number; content: string; createdAt: number; userId: number; username: string };
 
+type ApiError = Error & { status?: number };
+
 async function api<T>(path: string, options: RequestInit = {}) {
   const token = localStorage.getItem("bingo_token");
   const headers = new Headers(options.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API}${path}`, { ...options, headers });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Something went wrong.");
+  if (!response.ok) {
+    const err: ApiError = new Error(data.error || "Something went wrong.");
+    err.status = response.status;
+    throw err;
+  }
   return data as T;
 }
 
@@ -404,6 +410,61 @@ function SearchOverlay({ onClose, onProfile }: { onClose: () => void; onProfile:
   );
 }
 
+function FeedSkeleton({ showWakingUp }: { showWakingUp: boolean }) {
+  return (
+    <>
+      {showWakingUp && (
+        <div className="waking-up-banner">
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span className="spinner" />
+            <span>Waking up server… Render free instances can take ~20-30s.</span>
+          </div>
+        </div>
+      )}
+      <div className="welcome">
+        <div>
+          <div className="eyebrow">your little corner of the internet</div>
+          <h1>What's happening?</h1>
+        </div>
+        <div className="online-note"><span></span> live space</div>
+      </div>
+      <div className="stories" style={{ opacity: 0.7 }}>
+        {[1, 2, 3, 4, 5].map(i => (
+          <div key={i} className="story" style={{ pointerEvents: "none" }}>
+            <div className="skeleton skeleton-story" />
+            <div className="skeleton skeleton-line short" style={{ height: "10px", marginTop: "4px", width: "40px" }} />
+          </div>
+        ))}
+      </div>
+      <div className="panel composer" style={{ padding: "16px", marginBottom: "25px", opacity: 0.7 }}>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <div className="skeleton skeleton-avatar" />
+          <div style={{ flex: 1 }}>
+            <div className="skeleton skeleton-line medium" />
+            <div className="skeleton skeleton-line short" />
+          </div>
+        </div>
+      </div>
+      <div className="feed-label"><span>Latest</span><i /></div>
+      <section className="feed" style={{ opacity: 0.7 }}>
+        {[1, 2, 3].map(i => (
+          <div key={i} className="post panel" style={{ padding: "16px" }}>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "14px" }}>
+              <div className="skeleton skeleton-avatar" />
+              <div style={{ flex: 1 }}>
+                <div className="skeleton skeleton-line short" />
+                <div className="skeleton skeleton-line" style={{ width: "25%", height: "10px" }} />
+              </div>
+            </div>
+            <div className="skeleton skeleton-line" />
+            <div className="skeleton skeleton-line medium" />
+          </div>
+        ))}
+      </section>
+    </>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
@@ -411,23 +472,52 @@ export default function App() {
   const [storyComposer, setStoryComposer] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [profile, setProfile] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem("bingo_token")));
+  const [showWakingUp, setShowWakingUp] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [error, setError] = useState("");
 
   async function load() {
+    const token = localStorage.getItem("bingo_token");
+    if (!token) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setLoadError("");
+
     try {
       const me = await api<{ user: User }>("/api/me");
       setUser(me.user);
       const feed = await api<{ posts: Post[]; stories: Story[] }>("/api/feed");
       setPosts(feed.posts);
       setStories(feed.stories);
-    } catch {
-      localStorage.removeItem("bingo_token");
-      setUser(null);
-    } finally { setLoading(false); }
+      setLoadError("");
+    } catch (err: any) {
+      if (err?.status === 401) {
+        localStorage.removeItem("bingo_token");
+        setUser(null);
+      } else {
+        setLoadError(err instanceof Error ? err.message : "Could not connect to backend server.");
+      }
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    let timer: any;
+    if (loading) {
+      timer = setTimeout(() => setShowWakingUp(true), 3000);
+    } else {
+      setShowWakingUp(false);
+    }
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -438,9 +528,6 @@ export default function App() {
   }, []);
 
   const sortedPosts = useMemo(() => [...posts].sort((a, b) => b.createdAt - a.createdAt), [posts]);
-
-  if (loading) return <div className="loading-screen"><div className="logo-mark">BD</div><span>opening the space…</span></div>;
-  if (!user) return <AuthScreen onDone={(u) => { setUser(u); load(); }} />;
 
   async function deletePost(id: number) {
     setError("");
@@ -461,6 +548,12 @@ export default function App() {
     try { await api("/api/auth/logout", { method: "POST" }); } catch {}
     localStorage.removeItem("bingo_token");
     setUser(null);
+    setLoadError("");
+  }
+
+  const hasToken = Boolean(localStorage.getItem("bingo_token"));
+  if (!user && !loading && !hasToken && !loadError) {
+    return <AuthScreen onDone={(u) => { setUser(u); load(); }} />;
   }
 
   return (
@@ -471,71 +564,95 @@ export default function App() {
           <span>BINGO DUDE<span>.</span></span>
         </button>
         <div className="top-actions">
-          <button className="nav-icon" onClick={() => setSearchOpen(true)} title="Search"><Search size={19}/></button>
-          <button className="user-pill" onClick={() => setProfile(user.username)}><Avatar username={user.username} small/><span>@{user.username}</span></button>
-          <button className="nav-icon" onClick={logout} title="Log out"><LogOut size={17}/></button>
+          {user ? (
+            <>
+              <button className="nav-icon" onClick={() => setSearchOpen(true)} title="Search"><Search size={19}/></button>
+              <button className="user-pill" onClick={() => setProfile(user.username)}><Avatar username={user.username} small/><span>@{user.username}</span></button>
+              <button className="nav-icon" onClick={logout} title="Log out"><LogOut size={17}/></button>
+            </>
+          ) : (
+            <div className="user-pill" style={{ opacity: 0.8 }}>
+              <span style={{ color: "var(--accent)", fontSize: "10px" }}>●</span>
+              <span>{loading ? "connecting…" : "offline"}</span>
+            </div>
+          )}
         </div>
       </header>
 
       <main className="main">
-        {profile ? (
-          <Profile username={profile} currentUser={user} onBack={() => setProfile(null)} onProfile={setProfile} />
-        ) : (
-          <>
-            <div className="welcome">
-              <div>
-                <div className="eyebrow">your little corner of the internet</div>
-                <h1>What's happening?</h1>
-              </div>
-              <div className="online-note"><span></span> live space</div>
+        {loading ? (
+          <FeedSkeleton showWakingUp={showWakingUp} />
+        ) : loadError && !user ? (
+          <div className="panel wake-error-card">
+            <h3>Backend is waking up</h3>
+            <p>{loadError} Render's free tier takes 20-30s to wake up on inactive requests.</p>
+            <div className="retry-actions">
+              <button className="primary-button" onClick={load}>Retry Connection</button>
+              <button className="secondary-button" onClick={logout}>Use Another Account</button>
             </div>
-
-            <Stories
-              stories={stories}
-              currentUser={user}
-              onAdd={() => setStoryComposer(true)}
-              onDelete={deleteStory}
-            />
-
-            <Composer onCreated={post => setPosts(p => [post, ...p])} />
-
-            {error && <div className="error page-error">{error}</div>}
-
-            <div className="feed-label"><span>Latest</span><i /></div>
-
-            <section className="feed">
-              {sortedPosts.map(post => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  currentUser={user}
-                  onDelete={deletePost}
-                  onCountChange={(id, delta) => setPosts(p => p.map(x => x.id === id ? { ...x, replyCount: Math.max(0, x.replyCount + delta) } : x))}
-                  onProfile={setProfile}
-                />
-              ))}
-              {!sortedPosts.length && (
-                <div className="empty panel">
-                  <Sparkles size={22}/>
-                  <b>The space is quiet.</b>
-                  <span>Be the first person to leave something here.</span>
+          </div>
+        ) : user ? (
+          profile ? (
+            <Profile username={profile} currentUser={user} onBack={() => setProfile(null)} onProfile={setProfile} />
+          ) : (
+            <>
+              <div className="welcome">
+                <div>
+                  <div className="eyebrow">your little corner of the internet</div>
+                  <h1>What's happening?</h1>
                 </div>
-              )}
-            </section>
-          </>
+                <div className="online-note"><span></span> live space</div>
+              </div>
+
+              <Stories
+                stories={stories}
+                currentUser={user}
+                onAdd={() => setStoryComposer(true)}
+                onDelete={deleteStory}
+              />
+
+              <Composer onCreated={post => setPosts(p => [post, ...p])} />
+
+              {error && <div className="error page-error">{error}</div>}
+
+              <div className="feed-label"><span>Latest</span><i /></div>
+
+              <section className="feed">
+                {sortedPosts.map(post => (
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    currentUser={user}
+                    onDelete={deletePost}
+                    onCountChange={(id, delta) => setPosts(p => p.map(x => x.id === id ? { ...x, replyCount: Math.max(0, x.replyCount + delta) } : x))}
+                    onProfile={setProfile}
+                  />
+                ))}
+                {!sortedPosts.length && (
+                  <div className="empty panel">
+                    <Sparkles size={22}/>
+                    <b>The space is quiet.</b>
+                    <span>Be the first person to leave something here.</span>
+                  </div>
+                )}
+              </section>
+            </>
+          )
+        ) : (
+          <AuthScreen onDone={(u) => { setUser(u); load(); }} />
         )}
       </main>
 
       <footer className="footer">BINGO DUDE · small internet, big ideas</footer>
 
-      {storyComposer && (
+      {storyComposer && user && (
         <StoryComposer
           onCreated={story => setStories(s => [story, ...s])}
           onClose={() => setStoryComposer(false)}
         />
       )}
 
-      {searchOpen && <SearchOverlay onClose={() => setSearchOpen(false)} onProfile={setProfile} />}
+      {searchOpen && user && <SearchOverlay onClose={() => setSearchOpen(false)} onProfile={setProfile} />}
     </div>
   );
 }
