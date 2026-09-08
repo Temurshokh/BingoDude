@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 
 const MAX_IMAGE = 99 * 1024;
-const API = import.meta.env.VITE_API_URL ?? "";
+const API = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "" : `${window.location.origin}`);
 
 type User = { id: number; username: string };
 type Post = {
