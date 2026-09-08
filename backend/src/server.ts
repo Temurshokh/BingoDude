@@ -14,9 +14,42 @@ const uploadDir = path.resolve(process.cwd(), "uploads");
 
 fs.mkdirSync(uploadDir, { recursive: true });
 
+const defaultOrigins = [
+  "https://dude-bingo.vercel.app",
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "http://localhost:3000"
+];
+
+const envOrigins = process.env.FRONTEND_ORIGIN
+  ? process.env.FRONTEND_ORIGIN.split(",").map((o) => o.trim()).filter(Boolean)
+  : [];
+
+const allowedOrigins = Array.from(new Set([...defaultOrigins, ...envOrigins]));
+
 app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN?.split(",") ?? ["http://localhost:5173"],
-  credentials: false
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    try {
+      const cleanedOrigin = origin.replace(/\/$/, "");
+      const hostname = new URL(origin).hostname;
+      if (
+        allowedOrigins.includes(origin) ||
+        allowedOrigins.includes(cleanedOrigin) ||
+        hostname === "dude-bingo.vercel.app" ||
+        hostname.endsWith(".vercel.app")
+      ) {
+        return callback(null, true);
+      }
+    } catch {
+      // Ignore URL parsing errors
+    }
+    return callback(null, true);
+  },
+  methods: ["GET", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Authorization", "Content-Type"],
+  credentials: false,
+  optionsSuccessStatus: 200
 }));
 app.use(express.json({ limit: "256kb" }));
 app.use("/uploads", express.static(uploadDir));
