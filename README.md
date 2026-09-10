@@ -6,10 +6,9 @@ A tiny, fast social space for a few friends.
 
 - Frontend: React + Vite + TypeScript
 - Backend: Express + TypeScript
-- Database: SQLite (Node.js built-in `node:sqlite`)
-- Sessions: random opaque tokens stored in SQLite
-- Images: local disk storage, hard limit of 98,304 bytes (96 KiB)
-- No external services required
+- Database: managed PostgreSQL (required; it survives Render restarts and spin-down)
+- Sessions: random opaque tokens stored in PostgreSQL
+- Images: image metadata and bytes stored in PostgreSQL, hard limit of 98,304 bytes (96 KiB)
 
 ## Requirements
 
@@ -55,16 +54,29 @@ npm run build
 npm run preview
 ```
 
-## Data
+## Durable data and deployment
 
-The backend automatically creates:
+`DATABASE_URL` is required. The backend deliberately refuses to start without it, so a Render local filesystem can never be used for social data. On startup it creates its PostgreSQL schema if needed. The database contains users, sessions, posts, replies, stories, image metadata, and image bytes. This makes both records and uploaded images durable across Render restarts/spin-down.
 
-- `backend/data/bingo.db`
-- `backend/uploads/`
+For production:
 
-The SQLite schema is created on startup. Story cleanup runs automatically and also before relevant story reads.
+1. Create a managed PostgreSQL database (Render PostgreSQL is the simplest match) and copy its connection string into the Render web service as `DATABASE_URL`.
+2. Set `FRONTEND_ORIGIN` on the Render web service to the exact Vercel URL, for example `https://your-project.vercel.app`. Multiple origins may be comma-separated.
+3. Set `VITE_API_URL` in Vercel to the public Render API URL, for example `https://your-service.onrender.com`, then redeploy the frontend. Do not leave it unset: production API calls must not go to the Vercel frontend origin.
+4. Deploy the backend. `GET /api/health` returns `200` only after PostgreSQL is reachable; it returns `500` if the database is unavailable.
 
-To reset the local app completely, stop the backend and delete `backend/data/bingo.db` and the contents of `backend/uploads/`.
+### One-time SQLite migration
+
+Do this before switching traffic to the new database, while the legacy `backend/data/bingo.db` and `backend/uploads/` files are still available. The importer refuses to run if the target PostgreSQL database contains data, and rolls back on an error—it never resets or deletes the SQLite source.
+
+```bash
+cd backend
+DATABASE_URL="your-postgres-connection-string" npm run migrate:sqlite
+```
+
+Set `SQLITE_PATH` and `UPLOADS_PATH` if the legacy database and uploads are elsewhere. The command retains user, session, post, reply, and story IDs and imports each referenced image file into PostgreSQL. If a referenced image is missing, it stops rather than silently losing that record's image.
+
+Story cleanup runs automatically before story reads. Expired story images are removed from PostgreSQL only after the story row is removed.
 
 ## Account workflow
 
@@ -113,7 +125,7 @@ Main endpoints:
 - `GET /api/search?q=...`
 - `GET /api/health`
 
-Images are served from `/uploads/...`.
+Images are served from `/api/images/:id` and are read from PostgreSQL, not the Render filesystem.
 
 ## Image limit
 
