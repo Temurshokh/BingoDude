@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 
 const MAX_IMAGE = 99 * 1024;
-const API = import.meta.env.VITE_API_URL ?? (import.meta.env.PROD ? window.location.origin : "");
+const API = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
 
 type User = { id: number; username: string };
 type Post = {
@@ -17,12 +17,22 @@ type Story = {
   expiresAt: number; userId: number; username: string;
 };
 type Reply = { id: number; content: string; createdAt: number; userId: number; username: string };
+type ConnectionState = "connecting" | "connected" | "temporary-failure" | "api-error";
 
-type ApiError = Error & { status?: number };
+type FailureKind = "configuration" | "timeout" | "network" | "api" | "server";
+type ApiError = Error & { status?: number; kind?: FailureKind };
+
+function requestError(message: string, kind: FailureKind, status?: number): ApiError {
+  const error: ApiError = new Error(message);
+  error.kind = kind;
+  error.status = status;
+  return error;
+}
 
 async function api<T>(path: string, options: RequestInit = {}) {
+  if (import.meta.env.PROD && !API) throw requestError("The app is missing its API address. Set VITE_API_URL and redeploy the frontend.", "configuration");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  const timeout = setTimeout(() => controller.abort(), 30_000);
   try {
     const token = localStorage.getItem("bingo_token");
     const headers = new Headers(options.headers);
@@ -30,15 +40,19 @@ async function api<T>(path: string, options: RequestInit = {}) {
     const response = await fetch(`${API}${path}`, { ...options, headers, signal: controller.signal });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const err: ApiError = new Error(data.error || "Something went wrong.");
-      err.status = response.status;
-      throw err;
+      throw requestError(data.error || "The API could not complete this request.", response.status >= 500 ? "server" : "api", response.status);
     }
     return data as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw requestError("The server did not respond in 30 seconds.", "timeout");
+    if (error instanceof TypeError) throw requestError("Could not reach the server. Check your connection and try again.", "network");
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
+
+function assetUrl(path: string) { return path.startsWith("http") ? path : `${API}${path}`; }
 
 function ago(timestamp: number) {
   const diff = Math.max(0, Date.now() - timestamp);
@@ -61,7 +75,7 @@ function Avatar({ username, small = false }: { username: string; small?: boolean
 }
 
 function ImagePreview({ src }: { src: string }) {
-  return <img className="post-image" src={src} alt="" loading="lazy" />;
+  return <img className="post-image" src={assetUrl(src)} alt="" loading="lazy" />;
 }
 
 function AuthScreen({ onDone }: { onDone: (user: User, token: string) => void }) {
@@ -272,7 +286,7 @@ function Stories({ stories, currentUser, onAdd, onDelete }: {
               <div className="story-author"><Avatar username={selected.username} small /><b>@{selected.username}</b><span>{ago(selected.createdAt)}</span></div>
               <button className="close-button" onClick={() => setSelected(null)}><X /></button>
             </div>
-            {selected.imagePath && <img src={selected.imagePath} alt="" />}
+            {selected.imagePath && <img src={assetUrl(selected.imagePath)} alt="" />}
             {selected.content && <div className="story-text">{selected.content}</div>}
             {selected.userId === currentUser.id && (
               <button className="danger-button" onClick={() => { onDelete(selected.id); setSelected(null); }}><Trash2 size={15}/> Delete story</button>
@@ -481,20 +495,19 @@ export default function App() {
   const [loading, setLoading] = useState(() => Boolean(localStorage.getItem("bingo_token")));
   const [showWakingUp, setShowWakingUp] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [error, setError] = useState("");
 
   async function load() {
-    const token = localStorage.getItem("bingo_token");
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
-
     setLoading(true);
+    setConnection("connecting");
     setLoadError("");
+    const token = localStorage.getItem("bingo_token");
 
     try {
+      await api<{ ok: true }>("/api/health");
+      setConnection("connected");
+      if (!token) { setUser(null); return; }
       const me = await api<{ user: User }>("/api/me");
       setUser(me.user);
       const feed = await api<{ posts: Post[]; stories: Story[] }>("/api/feed");
@@ -506,14 +519,17 @@ export default function App() {
         localStorage.removeItem("bingo_token");
         setUser(null);
       } else {
-        setLoadError(err instanceof Error ? err.message : "Could not connect to backend server.");
+        const apiError = err as ApiError;
+        const temporary = apiError?.kind === "timeout" || apiError?.kind === "network" || [502, 503, 504].includes(apiError?.status ?? 0);
+        setConnection(temporary ? "temporary-failure" : "api-error");
+        setLoadError(apiError instanceof Error ? apiError.message : "Could not connect to the backend server.");
       }
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { void load(); }, []);
 
   useEffect(() => {
     let timer: any;
@@ -558,6 +574,8 @@ export default function App() {
   }
 
   const hasToken = Boolean(localStorage.getItem("bingo_token"));
+  const connectionLabel = connection === "connected" ? "connected" : connection === "connecting" ? "connecting" : connection === "temporary-failure" ? "connection retry needed" : "API needs attention";
+  const failureTitle = connection === "temporary-failure" ? "Couldn't reach the backend" : "The backend returned an error";
   if (!user && !loading && !hasToken && !loadError) {
     return <AuthScreen onDone={(u) => { setUser(u); load(); }} />;
   }
@@ -579,7 +597,7 @@ export default function App() {
           ) : (
             <div className="user-pill" style={{ opacity: 0.8 }}>
               <span style={{ color: "var(--accent)", fontSize: "10px" }}>●</span>
-              <span>{loading ? "connecting…" : "offline"}</span>
+              <span>{connectionLabel}</span>
             </div>
           )}
         </div>
@@ -590,8 +608,8 @@ export default function App() {
           <FeedSkeleton showWakingUp={showWakingUp} />
         ) : loadError && !user ? (
           <div className="panel wake-error-card">
-            <h3>Backend is waking up</h3>
-            <p>{loadError} Render's free tier takes 20-30s to wake up on inactive requests.</p>
+            <h3>{failureTitle}</h3>
+            <p>{loadError} {connection === "temporary-failure" && "If the Render service was asleep, it can take a short time to wake up."}</p>
             <div className="retry-actions">
               <button className="primary-button" onClick={load}>Retry Connection</button>
               <button className="secondary-button" onClick={logout}>Use Another Account</button>
@@ -607,7 +625,7 @@ export default function App() {
                   <div className="eyebrow">your little corner of the internet</div>
                   <h1>What's happening?</h1>
                 </div>
-                <div className="online-note"><span></span> live space</div>
+                <div className={`online-note ${connection !== "connected" ? `connection-${connection}` : ""}`}><span></span> {connectionLabel}</div>
               </div>
 
               <Stories

@@ -93,7 +93,7 @@ textarea::placeholder, input::placeholder { color: #66666f; }
 .delete-button { width: 31px; height: 31px; border-radius: 8px; color: #5f5f68; display: grid; place-items: center; }
 .delete-button:hover { color: var(--danger); background: #251619; }
 .post-content { white-space: pre-wrap; font-size: 15px; line-height: 1.6; margin: 14px 1px 13px; overflow-wrap: anywhere; }
-.post-image { width: 100%; max-height: 520px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); display: block; }
+.post-image { width: auto; max-width: 100%; max-height: min(460px, 62vh); object-fit: contain; border-radius: 12px; border: 1px solid var(--line); display: block; margin: 0 auto; background: #050506; }
 .reply-area { margin-top: 11px; }
 .reply-toggle { display: inline-flex; gap: 6px; align-items: center; border: 0; background: none; color: var(--muted); font-size: 11px; cursor: pointer; padding: 3px 0; }
 .reply-toggle:hover { color: var(--text); }
@@ -225,6 +225,6 @@ textarea::placeholder, input::placeholder { color: #66666f; }
   .online-note { display: none; }
   .composer { border-radius: 15px; }
   .post { border-radius: 15px; padding: 14px; }
-  .post-image { max-height: 430px; }
+  .post-image { max-height: min(360px, 55vh); }
   .footer { width: calc(100% - 20px); }
 }
